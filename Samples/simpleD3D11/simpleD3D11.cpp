@@ -508,13 +508,13 @@ HRESULT InitD3D(HWND hWnd)
         std::cout << "Failed GetSharedHandle hr= " << hr << std::endl;
     }
     // Import the D3D11 Vertex Buffer into CUDA
-    d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
+//    d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
     pResource->Release();
 
     g_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
     pResource->GetSharedHandle(&sharedHandle);
     // Import the D3D11 Keyed Mutex into CUDA
-    cudaImportKeyedMutex(sharedHandle, extSemaphore);
+//    cudaImportKeyedMutex(sharedHandle, extSemaphore);
     pResource->Release();
 
     D3D11_RASTERIZER_DESC rasterizerState;
@@ -624,6 +624,7 @@ void Cleanup()
 //-----------------------------------------------------------------------------
 void Render()
 {
+  return;
     static uint64_t key = 0;
 
     // Launch cuda kernel to generate sinewave in vertex buffer
