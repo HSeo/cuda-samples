@@ -70,7 +70,10 @@ ID3D11VertexShader     *g_pVertexShader;
 ID3D11PixelShader      *g_pPixelShader;
 ID3D11InputLayout      *g_pLayout;
 ID3D11Buffer           *g_VertexBuffer;
+IDXGIResource1         *g_pVertexBufferResource;
 IDXGIKeyedMutex        *g_pKeyedMutex11;
+IDXGIResource1         *g_pKeyedMutex11Resource;
+
 
 Vertex *d_VertexBufPtr = NULL;
 cudaExternalMemory_t extMemory;
@@ -499,23 +502,23 @@ HRESULT InitD3D(HWND hWnd)
     g_pd3dDeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
     AssertOrQuit(SUCCEEDED(hr));
 
-    IDXGIResource1* pResource;
+    //IDXGIResource1* pResource;
     HANDLE sharedHandle;
-    g_VertexBuffer->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
-    hr = pResource->GetSharedHandle(&sharedHandle);
+    g_VertexBuffer->QueryInterface(__uuidof(IDXGIResource1), (void**)&g_pVertexBufferResource);
+    hr = g_pVertexBufferResource->GetSharedHandle(&sharedHandle);
     if (!SUCCEEDED(hr))
     {
         std::cout << "Failed GetSharedHandle hr= " << hr << std::endl;
     }
     // Import the D3D11 Vertex Buffer into CUDA
 //    d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
-    pResource->Release();
+    g_pVertexBufferResource->Release();
 
-    g_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
-    pResource->GetSharedHandle(&sharedHandle);
+    g_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&g_pKeyedMutex11Resource);
+    g_pKeyedMutex11Resource->GetSharedHandle(&sharedHandle);
     // Import the D3D11 Keyed Mutex into CUDA
 //    cudaImportKeyedMutex(sharedHandle, extSemaphore);
-    pResource->Release();
+    g_pKeyedMutex11Resource->Release();
 
     D3D11_RASTERIZER_DESC rasterizerState;
     rasterizerState.FillMode = D3D11_FILL_SOLID;
@@ -590,9 +593,29 @@ void Cleanup()
         g_pPixelShader->Release();
     }
 
+    if (g_pLayout)
+    {
+        g_pLayout->Release();
+    }
+
     if (g_VertexBuffer)
     {
         g_VertexBuffer->Release();
+    }
+
+    if (g_pVertexBufferResource)
+    {
+        g_pVertexBufferResource->Release();
+    }
+
+    if (g_pKeyedMutex11Resource)
+    {
+        g_pKeyedMutex11Resource->Release();
+    }
+
+    if (g_pKeyedMutex11)
+    {
+        g_pKeyedMutex11->Release();
     }
 
     if (g_pSwapChainRTV != NULL)
@@ -624,11 +647,10 @@ void Cleanup()
 //-----------------------------------------------------------------------------
 void Render()
 {
-  return;
     static uint64_t key = 0;
 
     // Launch cuda kernel to generate sinewave in vertex buffer
-    RunSineWaveKernel(extSemaphore, key, INFINITE, g_WindowWidth, g_WindowWidth, d_VertexBufPtr, cuda_stream);
+//    RunSineWaveKernel(extSemaphore, key, INFINITE, g_WindowWidth, g_WindowWidth, d_VertexBufPtr, cuda_stream);
 
     // Draw the scene using them
     DrawScene(key);
