@@ -662,7 +662,7 @@ HRESULT Render()
     l_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
     pResource->GetSharedHandle(&sharedHandle);
     // Import the D3D11 Keyed Mutex into CUDA
-    cudaImportKeyedMutex(sharedHandle, extSemaphore);
+//    cudaImportKeyedMutex(sharedHandle, extSemaphore);
     pResource->Release();
 
     // Launch cuda kernel to generate sinewave in vertex buffer
@@ -673,7 +673,7 @@ HRESULT Render()
 
 //    checkCudaErrors(cudaFree(d_VertexBufPtr));
 //    checkCudaErrors(cudaDestroyExternalMemory(extMemory));
-    checkCudaErrors(cudaDestroyExternalSemaphore(extSemaphore));
+//    checkCudaErrors(cudaDestroyExternalSemaphore(extSemaphore));
 
     l_pKeyedMutex11->Release();
 
