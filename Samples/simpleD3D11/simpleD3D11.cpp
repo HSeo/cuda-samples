@@ -41,6 +41,10 @@
 #include <cuda_d3d11_interop.h>
 #include <d3dcompiler.h>
 
+#if defined(_DEBUG)
+  #include <dxgidebug.h>
+#endif
+
 // includes, project
 #include <rendercheck_d3d11.h>
 #include <helper_cuda.h>
@@ -393,7 +397,11 @@ HRESULT InitD3D(HWND hWnd)
              g_pCudaCapableAdapter,
              D3D_DRIVER_TYPE_UNKNOWN,//D3D_DRIVER_TYPE_HARDWARE,
              NULL, //HMODULE Software
-             0, //UINT Flags
+#if defined(_DEBUG)
+             D3D11_CREATE_DEVICE_DEBUG, //UINT Flags
+#else
+             0,
+#endif
              tour_fl, // D3D_FEATURE_LEVEL* pFeatureLevels
              2, //FeatureLevels
              D3D11_SDK_VERSION, //UINT SDKVersion
@@ -599,7 +607,14 @@ void Cleanup()
 
     if (g_pd3dDevice != NULL)
     {
-        g_pd3dDevice->Release();
+#if defined(_DEBUG)
+      ID3D11Debug* l_pd3dDebug = nullptr;
+      g_pd3dDevice->QueryInterface(__uuidof(ID3D11Debug), (void**)&l_pd3dDebug);
+      l_pd3dDebug->ReportLiveDeviceObjects(D3D11_RLDO_SUMMARY);
+      l_pd3dDebug->ReportLiveDeviceObjects(D3D11_RLDO_DETAIL);
+      l_pd3dDebug->Release();
+#endif
+      g_pd3dDevice->Release();
     }
 }
 
