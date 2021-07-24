@@ -656,7 +656,7 @@ HRESULT Render()
       std::cout << "Failed GetSharedHandle hr= " << hr << std::endl;
     }
     // Import the D3D11 Vertex Buffer into CUDA
-    d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
+//    d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
     pResource->Release();
 
     l_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
@@ -666,13 +666,13 @@ HRESULT Render()
     pResource->Release();
 
     // Launch cuda kernel to generate sinewave in vertex buffer
-    RunSineWaveKernel(extSemaphore, key, INFINITE, g_WindowWidth, g_WindowWidth, d_VertexBufPtr, cuda_stream);
+//    RunSineWaveKernel(extSemaphore, key, INFINITE, g_WindowWidth, g_WindowWidth, d_VertexBufPtr, cuda_stream);
 
     // Draw the scene using them
     DrawScene(key, l_VertexBuffer, l_pKeyedMutex11);
 
-    checkCudaErrors(cudaFree(d_VertexBufPtr));
-    checkCudaErrors(cudaDestroyExternalMemory(extMemory));
+//    checkCudaErrors(cudaFree(d_VertexBufPtr));
+//    checkCudaErrors(cudaDestroyExternalMemory(extMemory));
     checkCudaErrors(cudaDestroyExternalSemaphore(extSemaphore));
 
     l_pKeyedMutex11->Release();
