@@ -69,13 +69,12 @@ ID3D11InputLayout      *g_pInputLayout = NULL;
 ID3D11VertexShader     *g_pVertexShader;
 ID3D11PixelShader      *g_pPixelShader;
 ID3D11InputLayout      *g_pLayout;
-ID3D11Buffer           *g_VertexBuffer;
-IDXGIKeyedMutex        *g_pKeyedMutex11;
-
-
-Vertex *d_VertexBufPtr = NULL;
-cudaExternalMemory_t extMemory;
-cudaExternalSemaphore_t extSemaphore;
+//ID3D11Buffer           *g_VertexBuffer;
+//IDXGIKeyedMutex        *g_pKeyedMutex11;
+//
+//Vertex *d_VertexBufPtr = NULL;
+//cudaExternalMemory_t extMemory;
+//cudaExternalSemaphore_t extSemaphore;
 
 //
 // Vertex and Pixel shaders here : VSMain() & PSMain()
@@ -127,9 +126,9 @@ cudaStream_t cuda_stream;
 //-----------------------------------------------------------------------------
 HRESULT InitD3D(HWND hWnd);
 
-bool DrawScene();
+bool DrawScene(uint64_t & key, ID3D11Buffer * &l_VertexBuffer, IDXGIKeyedMutex * &l_pKeyedMutex11);
 void Cleanup();
-void Render();
+HRESULT Render();
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -472,17 +471,17 @@ HRESULT InitD3D(HWND hWnd)
         g_pd3dDeviceContext->PSSetShader(g_pPixelShader, NULL, 0);
     }
 
-    D3D11_BUFFER_DESC bufferDesc;
-    bufferDesc.Usage = D3D11_USAGE_DEFAULT;
-    bufferDesc.ByteWidth = sizeof(Vertex) * g_WindowWidth * g_WindowHeight;
-    bufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    bufferDesc.CPUAccessFlags = 0;
-    bufferDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    //D3D11_BUFFER_DESC bufferDesc;
+    //bufferDesc.Usage = D3D11_USAGE_DEFAULT;
+    //bufferDesc.ByteWidth = sizeof(Vertex) * g_WindowWidth * g_WindowHeight;
+    //bufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    //bufferDesc.CPUAccessFlags = 0;
+    //bufferDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
-    hr = g_pd3dDevice->CreateBuffer(&bufferDesc, NULL, &g_VertexBuffer);
-    AssertOrQuit(SUCCEEDED(hr));
+    //hr = g_pd3dDevice->CreateBuffer(&bufferDesc, NULL, &g_VertexBuffer);
+    //AssertOrQuit(SUCCEEDED(hr));
 
-    hr = g_VertexBuffer->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_pKeyedMutex11);
+    //hr = g_VertexBuffer->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_pKeyedMutex11);
 
     AssertOrQuit(SUCCEEDED(hr));
 
@@ -500,23 +499,23 @@ HRESULT InitD3D(HWND hWnd)
     g_pd3dDeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
     AssertOrQuit(SUCCEEDED(hr));
 
-    IDXGIResource1* pResource;
-    HANDLE sharedHandle;
-    g_VertexBuffer->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
-    hr = pResource->GetSharedHandle(&sharedHandle);
-    if (!SUCCEEDED(hr))
-    {
-        std::cout << "Failed GetSharedHandle hr= " << hr << std::endl;
-    }
-    // Import the D3D11 Vertex Buffer into CUDA
-    d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
-    pResource->Release();
+    //IDXGIResource1* pResource;
+    //HANDLE sharedHandle;
+    //g_VertexBuffer->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
+    //hr = pResource->GetSharedHandle(&sharedHandle);
+    //if (!SUCCEEDED(hr))
+    //{
+    //    std::cout << "Failed GetSharedHandle hr= " << hr << std::endl;
+    //}
+    //// Import the D3D11 Vertex Buffer into CUDA
+    //d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
+    //pResource->Release();
 
-    g_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
-    pResource->GetSharedHandle(&sharedHandle);
-    // Import the D3D11 Keyed Mutex into CUDA
-    cudaImportKeyedMutex(sharedHandle, extSemaphore);
-    pResource->Release();
+    //g_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
+    //pResource->GetSharedHandle(&sharedHandle);
+    //// Import the D3D11 Keyed Mutex into CUDA
+    //cudaImportKeyedMutex(sharedHandle, extSemaphore);
+    //pResource->Release();
 
     D3D11_RASTERIZER_DESC rasterizerState;
     rasterizerState.FillMode = D3D11_FILL_SOLID;
@@ -539,7 +538,7 @@ HRESULT InitD3D(HWND hWnd)
 ////////////////////////////////////////////////////////////////////////////////
 //! Draw the final result on the screen
 ////////////////////////////////////////////////////////////////////////////////
-bool DrawScene(uint64_t &key)
+bool DrawScene(uint64_t &key, ID3D11Buffer*& l_VertexBuffer, IDXGIKeyedMutex*& l_pKeyedMutex11)
 {
 
     HRESULT hr = S_OK;
@@ -548,13 +547,13 @@ bool DrawScene(uint64_t &key)
 
     g_pd3dDeviceContext->ClearRenderTargetView(g_pSwapChainRTV, ClearColor);
 
-    hr = g_pKeyedMutex11->AcquireSync(key++, INFINITE);
+    hr = l_pKeyedMutex11->AcquireSync(key++, INFINITE);
     AssertOrQuit(SUCCEEDED(hr));
     UINT stride = sizeof(Vertex);
     UINT offset = 0;
-    g_pd3dDeviceContext->IASetVertexBuffers(0, 1, &g_VertexBuffer, &stride, &offset);
+    g_pd3dDeviceContext->IASetVertexBuffers(0, 1, &l_VertexBuffer, &stride, &offset);
     g_pd3dDeviceContext->Draw(g_WindowHeight*g_WindowWidth, 0);
-    hr = g_pKeyedMutex11->ReleaseSync(key);
+    hr = l_pKeyedMutex11->ReleaseSync(key);
     AssertOrQuit(SUCCEEDED(hr));
 
     // Present the backbuffer contents to the display
@@ -569,9 +568,9 @@ bool DrawScene(uint64_t &key)
 //-----------------------------------------------------------------------------
 void Cleanup()
 {
-    checkCudaErrors(cudaFree(d_VertexBufPtr));
-    checkCudaErrors(cudaDestroyExternalMemory(extMemory));
-    checkCudaErrors(cudaDestroyExternalSemaphore(extSemaphore));
+    //checkCudaErrors(cudaFree(d_VertexBufPtr));
+    //checkCudaErrors(cudaDestroyExternalMemory(extMemory));
+    //checkCudaErrors(cudaDestroyExternalSemaphore(extSemaphore));
     //
     // clean up Direct3D
     //
@@ -591,20 +590,10 @@ void Cleanup()
         g_pPixelShader->Release();
     }
 
-    if (g_pLayout)
-    {
-        g_pLayout->Release();
-    }
-
-    if (g_VertexBuffer)
-    {
-        g_VertexBuffer->Release();
-    }
-
-    if (g_pKeyedMutex11)
-    {
-        g_pKeyedMutex11->Release();
-    }
+    //if (g_VertexBuffer)
+    //{
+    //    g_VertexBuffer->Release();
+    //}
 
     if (g_pSwapChainRTV != NULL)
     {
@@ -633,15 +622,65 @@ void Cleanup()
 // Name: Render()
 // Desc: Launches the CUDA kernels to fill in the vertex buffer
 //-----------------------------------------------------------------------------
-void Render()
+HRESULT Render()
 {
-    static uint64_t key = 0;
+    /*static */uint64_t key = 0;
+
+    ID3D11Buffer* l_VertexBuffer;
+    IDXGIKeyedMutex* l_pKeyedMutex11;
+    Vertex* d_VertexBufPtr = NULL;
+    cudaExternalMemory_t extMemory;
+    cudaExternalSemaphore_t extSemaphore;
+
+    HRESULT hr = S_OK;
+
+    D3D11_BUFFER_DESC bufferDesc;
+    bufferDesc.Usage = D3D11_USAGE_DEFAULT;
+    bufferDesc.ByteWidth = sizeof(Vertex) * g_WindowWidth * g_WindowHeight;
+    bufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    bufferDesc.CPUAccessFlags = 0;
+    bufferDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+
+    hr = g_pd3dDevice->CreateBuffer(&bufferDesc, NULL, &l_VertexBuffer);
+    AssertOrQuit(SUCCEEDED(hr));
+
+    hr = l_VertexBuffer->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&l_pKeyedMutex11);
+
+    HANDLE sharedHandle;
+
+    IDXGIResource1* pResource;
+    l_VertexBuffer->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
+    hr = pResource->GetSharedHandle(&sharedHandle);
+    if (!SUCCEEDED(hr))
+    {
+      std::cout << "Failed GetSharedHandle hr= " << hr << std::endl;
+    }
+    // Import the D3D11 Vertex Buffer into CUDA
+    d_VertexBufPtr = cudaImportVertexBuffer(sharedHandle, extMemory, g_WindowWidth, g_WindowHeight);
+    pResource->Release();
+
+    l_pKeyedMutex11->QueryInterface(__uuidof(IDXGIResource1), (void**)&pResource);
+    pResource->GetSharedHandle(&sharedHandle);
+    // Import the D3D11 Keyed Mutex into CUDA
+    cudaImportKeyedMutex(sharedHandle, extSemaphore);
+    pResource->Release();
 
     // Launch cuda kernel to generate sinewave in vertex buffer
     RunSineWaveKernel(extSemaphore, key, INFINITE, g_WindowWidth, g_WindowWidth, d_VertexBufPtr, cuda_stream);
 
     // Draw the scene using them
-    DrawScene(key);
+    DrawScene(key, l_VertexBuffer, l_pKeyedMutex11);
+
+    checkCudaErrors(cudaFree(d_VertexBufPtr));
+    checkCudaErrors(cudaDestroyExternalMemory(extMemory));
+    checkCudaErrors(cudaDestroyExternalSemaphore(extSemaphore));
+
+    l_pKeyedMutex11->Release();
+
+    if (l_VertexBuffer)
+    {
+      l_VertexBuffer->Release();
+    }
 }
 
 //-----------------------------------------------------------------------------
