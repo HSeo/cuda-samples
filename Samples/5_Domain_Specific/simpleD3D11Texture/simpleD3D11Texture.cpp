@@ -478,7 +478,7 @@ bool InitTexture3DInterop(const int width, const int height, const int depth, Te
     cuda_error = cudaExternalMemoryGetMappedMipmappedArray(&(g_texture_3d.cuda_mip_mapped_array), g_texture_3d.cuda_external_memory, &external_memory_mipmapped_array_desc);
     //getLastCudaError("cudaExternalMemoryGetMappedMipmappedArray (g_texture_3d) failed");
     if (cuda_error != cudaSuccess) {
-      std::cout << "cudaExternalMemoryGetMappedMipmappedArray (g_texture_3d) failed at Texture3D voxels (" << texture3d_desc.Width << ", " << texture3d_desc.Height << ", " << texture3d_desc.Depth << ")" << std::endl;
+      std::cout << "cudaExternalMemoryGetMappedMipmappedArray (g_texture_3d) failed " << cudaGetErrorName(cuda_error) << " at Texture3D voxels(" << texture3d_desc.Width << ", " << texture3d_desc.Height << ", " << texture3d_desc.Depth << ")" << std::endl;
       dxgi_resource->Release();
       return false;
     }
