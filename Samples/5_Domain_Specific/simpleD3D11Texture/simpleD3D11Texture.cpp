@@ -60,8 +60,6 @@ ID3D11RenderTargetView *g_pSwapChainRTV =
     NULL;  // The Render target view on the swap chain ( used for clear)
 ID3D11RasterizerState *g_pRasterState = NULL;
 
-ID3D11InputLayout *g_pInputLayout = NULL;
-
 #ifdef USEEFFECT
 #pragma message( \
     ">>>> NOTE : Using Effect library (see DXSDK Utility folder for sources)")
@@ -241,12 +239,10 @@ const unsigned int g_WindowHeight = 720;
 
 int g_iFrameToCompare = 10;
 
-// Data structure for volume textures shared between DX10 and CUDA
-struct {
+// Data structure for volume textures shared between DX11 and CUDA
+struct Texture3D {
   ID3D11Texture3D *pTexture;
-  ID3D11ShaderResourceView *pSRView;
   cudaGraphicsResource *cudaResource;
-  void *cudaLinearMemory;
   size_t pitch;
   int width;
   int height;
@@ -254,7 +250,7 @@ struct {
 #ifndef USEEFFECT
   int offsetInShader;
 #endif
-} g_texture_3d;
+};
 
 // The CUDA kernel launchers that get called
 extern "C" {
@@ -270,9 +266,10 @@ bool cuda_texture_cube(void *surface, int width, int height, size_t pitch,
 // Forward declarations
 //-----------------------------------------------------------------------------
 HRESULT InitD3D(HWND hWnd);
-HRESULT InitTextures();
+HRESULT InitTexture3D(const int width, const int height, const int depth, Texture3D& g_texture_3d);
 
-void Cleanup();
+void CleanupTexture(Texture3D& g_texture_3d);
+void CleanupOthers();
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -453,28 +450,23 @@ int main(int argc, char *argv[]) {
   UpdateWindow(hWnd);
 
   // Initialize Direct3D
-  if (SUCCEEDED(InitD3D(hWnd)) && SUCCEEDED(InitTextures())) {
+  if (SUCCEEDED(InitD3D(hWnd))) {
     // 3D
-    cudaGraphicsD3D11RegisterResource(&g_texture_3d.cudaResource,
-                                      g_texture_3d.pTexture,
-                                      cudaGraphicsRegisterFlagsNone);
-    std::cout << "Registered" << std::endl;
-    getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_3d) failed");
-    // create the buffer. pixel fmt is DXGI_FORMAT_R8G8B8A8_SNORM
-    // cudaMallocPitch(&g_texture_3d.cudaLinearMemory, &g_texture_3d.pitch,
-    // g_texture_3d.width * 4, g_texture_3d.height * g_texture_3d.depth);
-    cudaMalloc(
-        &g_texture_3d.cudaLinearMemory,
-        g_texture_3d.width * 4 * g_texture_3d.height * g_texture_3d.depth);
-    g_texture_3d.pitch = g_texture_3d.width * 4;
-    getLastCudaError("cudaMallocPitch (g_texture_3d) failed");
-    cudaMemset(g_texture_3d.cudaLinearMemory, 1,
-               g_texture_3d.pitch * g_texture_3d.height * g_texture_3d.depth);
-    getLastCudaError("cudaMemset (g_texture_3d) failed");
-  }
-   
-  Cleanup();
+    Texture3D g_texture_3d;
+    const int width = 512;
+    const int height = 512;
+    const int depth = 480;
+    if (SUCCEEDED(InitTexture3D(width, height, depth, g_texture_3d))) {
+      cudaGraphicsD3D11RegisterResource(&g_texture_3d.cudaResource,
+        g_texture_3d.pTexture,
+        cudaGraphicsRegisterFlagsNone);
+      std::cout << "Registered" << std::endl;
+      getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_3d) failed");
 
+      CleanupTexture(g_texture_3d);
+    }
+  }
+  CleanupOthers();
   // Release D3D Library (after message loop)
   dynlinkUnloadD3D11API();
 
@@ -686,18 +678,18 @@ HRESULT InitD3D(HWND hWnd) {
 }
 
 //-----------------------------------------------------------------------------
-// Name: InitTextures()
+// Name: InitTexture3D()
 // Desc: Initializes Direct3D Textures (allocation and initialization)
 //-----------------------------------------------------------------------------
-HRESULT InitTextures() {
+HRESULT InitTexture3D(const int width, const int height, const int depth, Texture3D& g_texture_3d) {
   //
   // create the D3D resources we'll be using
   //
   // 3D texture
   {
-    g_texture_3d.width = 64;
-    g_texture_3d.height = 64;
-    g_texture_3d.depth = 64;
+    g_texture_3d.width = width;
+    g_texture_3d.height = height;
+    g_texture_3d.depth = depth;
 
     D3D11_TEXTURE3D_DESC desc;
     ZeroMemory(&desc, sizeof(D3D11_TEXTURE3D_DESC));
@@ -705,28 +697,15 @@ HRESULT InitTextures() {
     desc.Height = g_texture_3d.height;
     desc.Depth = g_texture_3d.depth;
     desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_SNORM;
+    desc.Format = DXGI_FORMAT_R16_UNORM;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
     if (FAILED(g_pd3dDevice->CreateTexture3D(&desc, NULL,
                                              &g_texture_3d.pTexture))) {
       return E_FAIL;
     }
-
-    if (FAILED(g_pd3dDevice->CreateShaderResourceView(
-            g_texture_3d.pTexture, NULL, &g_texture_3d.pSRView))) {
-      return E_FAIL;
-    }
-
-#ifdef USEEFFECT
-    g_pTexture3D->SetResource(g_texture_3d.pSRView);
-#else
-    g_texture_3d.offsetInShader =
-        1;  // to be clean we should look for the offset from the shader code
-    g_pd3dDeviceContext->PSSetShaderResources(g_texture_3d.offsetInShader, 1,
-                                              &g_texture_3d.pSRView);
-#endif
   }
 
   return S_OK;
@@ -736,25 +715,24 @@ HRESULT InitTextures() {
 // Name: Cleanup()
 // Desc: Releases all previously initialized objects
 //-----------------------------------------------------------------------------
-void Cleanup() {
+void CleanupTexture(Texture3D& g_texture_3d) {
   // unregister the Cuda resources
   cudaGraphicsUnregisterResource(g_texture_3d.cudaResource);
   getLastCudaError("cudaGraphicsUnregisterResource (g_texture_3d) failed");
-  cudaFree(g_texture_3d.cudaLinearMemory);
-  getLastCudaError("cudaFree (g_texture_3d) failed");
 
   //
   // clean up Direct3D
   //
   {
-    // release the resources we created
-    g_texture_3d.pSRView->Release();
     g_texture_3d.pTexture->Release();
+  }
+}
 
-    if (g_pInputLayout != NULL) {
-      g_pInputLayout->Release();
-    }
-
+void CleanupOthers(){
+  //
+  // clean up Direct3D
+  //
+  {
 #ifdef USEEFFECT
 
     if (g_pSimpleEffect != NULL) {
@@ -805,7 +783,7 @@ static LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam,
     case WM_KEYDOWN:
       if (wParam == VK_ESCAPE) {
         g_bDone = true;
-        Cleanup();
+        //Cleanup();
         PostQuitMessage(0);
         return 0;
       }
@@ -814,7 +792,7 @@ static LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam,
 
     case WM_DESTROY:
       g_bDone = true;
-      Cleanup();
+      //Cleanup();
       PostQuitMessage(0);
       return 0;
 
