@@ -38,12 +38,16 @@
 #include <dynlink_d3d11.h>
 #include <cuda_runtime_api.h>
 #include <cuda_d3d11_interop.h>
+#include <channel_descriptor.h>
+#include <driver_functions.h>
 #include <d3dcompiler.h>
 
 // includes, project
 #include <rendercheck_d3d11.h>
 #include <helper_cuda.h>
 #include <helper_functions.h>  // includes cuda.h and cuda_runtime_api.h
+
+#include <dxgi1_2.h> // Required for using External Resource Interoperability
 
 #define MAX_EPSILON 10
 
@@ -242,7 +246,9 @@ int g_iFrameToCompare = 10;
 // Data structure for volume textures shared between DX11 and CUDA
 struct Texture3D {
   ID3D11Texture3D *pTexture;
-  cudaGraphicsResource *cudaResource;
+  cudaExternalMemory_t cuda_external_memory;
+  cudaMipmappedArray* cuda_mip_mapped_array;
+  //cudaGraphicsResource *cudaResource;
   size_t pitch;
   int width;
   int height;
@@ -368,6 +374,58 @@ bool findDXDevice(char *dev_name) {
   return true;
 }
 
+bool GetTextureBufferSizeByte(const D3D11_TEXTURE3D_DESC& d3d11_texture3d_desc, unsigned long long* buffer_size_byte) {
+  const unsigned long long num_total_voxels = (unsigned long long)(d3d11_texture3d_desc.Width) * (unsigned long long)(d3d11_texture3d_desc.Height) * (unsigned long long)(d3d11_texture3d_desc.Depth);
+  switch (d3d11_texture3d_desc.Format) {
+  case DXGI_FORMAT::DXGI_FORMAT_R8_UINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R8_UNORM:
+    *buffer_size_byte = num_total_voxels * sizeof(unsigned char);
+    return true;
+  case DXGI_FORMAT::DXGI_FORMAT_R8_SINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R8_SNORM:
+    *buffer_size_byte = num_total_voxels * sizeof(signed char);
+    return true;
+  case DXGI_FORMAT::DXGI_FORMAT_R16_UINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R16_UNORM:
+    *buffer_size_byte = num_total_voxels * sizeof(unsigned short);
+    return true;
+  case DXGI_FORMAT::DXGI_FORMAT_R16_SINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R16_SNORM:
+    *buffer_size_byte = num_total_voxels * sizeof(short);
+    return true;
+  default:
+    std::cout << "Only DXGI_FORMAT_{R8, R16}_{UINT, UNORM, SINT, SNORM} are currently supported." << std::endl;
+    *buffer_size_byte = 0;
+    return false;
+  }
+}
+
+bool GetCudaChannelFormatDesc(const DXGI_FORMAT& dxgi_format, cudaChannelFormatDesc* desc) {
+  memset(desc, 0, sizeof(desc));
+  switch (dxgi_format) {
+  case DXGI_FORMAT::DXGI_FORMAT_R8_UINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R8_UNORM:
+    *desc = cudaCreateChannelDesc<unsigned char>();
+    return true;
+  case DXGI_FORMAT::DXGI_FORMAT_R8_SINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R8_SNORM:
+    *desc = cudaCreateChannelDesc<signed char>();
+    return true;
+  case DXGI_FORMAT::DXGI_FORMAT_R16_UINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R16_UNORM:
+    *desc = cudaCreateChannelDesc<unsigned short>();
+    return true;
+  case DXGI_FORMAT::DXGI_FORMAT_R16_SINT:
+  case DXGI_FORMAT::DXGI_FORMAT_R16_SNORM:
+    *desc = cudaCreateChannelDesc<short>();
+    return true;
+  default:
+    std::cout << "Only DXGI_FORMAT_{R8, R16}_{UINT, UNORM, SINT, SNORM} are currently supported." << std::endl;
+    return false;
+  }
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Program main
 ////////////////////////////////////////////////////////////////////////////////
@@ -455,13 +513,64 @@ int main(int argc, char *argv[]) {
     Texture3D g_texture_3d;
     const int width = 512;
     const int height = 512;
-    const int depth = 480;
+    const int depth = 481;
     if (SUCCEEDED(InitTexture3D(width, height, depth, g_texture_3d))) {
-      cudaGraphicsD3D11RegisterResource(&g_texture_3d.cudaResource,
-        g_texture_3d.pTexture,
-        cudaGraphicsRegisterFlagsNone);
-      std::cout << "Registered" << std::endl;
-      getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_3d) failed");
+      //cudaGraphicsD3D11RegisterResource(&g_texture_3d.cudaResource,
+      //  g_texture_3d.pTexture,
+      //  cudaGraphicsRegisterFlagsNone);
+      //getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_3d) failed");
+
+      D3D11_TEXTURE3D_DESC texture3d_desc;
+      g_texture_3d.pTexture->GetDesc(&texture3d_desc);
+
+      unsigned long long buffer_size_byte;
+      if (!GetTextureBufferSizeByte(texture3d_desc, &buffer_size_byte)) { return false; }
+
+      IDXGIResource1* dxgi_resource;
+      HANDLE d3d11_texture_3d_shared_handle;
+      if (FAILED(g_texture_3d.pTexture->QueryInterface(__uuidof(IDXGIResource1), (void**)&dxgi_resource))) {
+        std::cout << "Error: IDXGIResource1 from D3D11_buffer could not be acquired." << std::endl;
+        return false;
+      }
+      if (FAILED(dxgi_resource->GetSharedHandle(&d3d11_texture_3d_shared_handle))) { // Do not use CloseHandle(shared_handle) for this handle because it is not an NT handle. It causes "An invalid handle was specified." error.
+        std::cout << "Error: shared handle could not be acquired." << std::endl;
+        dxgi_resource->Release();
+        return false;
+      }
+
+      cudaExternalMemoryHandleDesc external_memory_handle_desc;
+      memset(&external_memory_handle_desc, 0, sizeof(external_memory_handle_desc));
+      external_memory_handle_desc.type = cudaExternalMemoryHandleTypeD3D11ResourceKmt;
+      external_memory_handle_desc.size = buffer_size_byte;
+      external_memory_handle_desc.flags = cudaExternalMemoryDedicated;
+      external_memory_handle_desc.handle.win32.handle = (void*)d3d11_texture_3d_shared_handle;
+      cudaError_t cuda_error = cudaImportExternalMemory(&(g_texture_3d.cuda_external_memory), &external_memory_handle_desc);
+      //getLastCudaError("cudaImportExternalMemory (g_texture_3d) failed");
+      if (cuda_error != cudaSuccess) {
+        dxgi_resource->Release();
+        return false;
+      }
+
+      cudaChannelFormatDesc cuda_channel_format_desc;
+      if (!GetCudaChannelFormatDesc(texture3d_desc.Format, &cuda_channel_format_desc)) { return false; }
+
+      const unsigned int bytes_per_pixel = buffer_size_byte / ((unsigned long long)texture3d_desc.Width * texture3d_desc.Height * texture3d_desc.Depth);
+
+      cudaExternalMemoryMipmappedArrayDesc external_memory_mipmapped_array_desc;
+      memset(&external_memory_mipmapped_array_desc, 0, sizeof(external_memory_mipmapped_array_desc));
+      external_memory_mipmapped_array_desc.offset = 0;
+      external_memory_mipmapped_array_desc.formatDesc = cuda_channel_format_desc;
+      external_memory_mipmapped_array_desc.extent = make_cudaExtent(texture3d_desc.Width/* * bytes_per_pixel*/, texture3d_desc.Height/* * bytes_per_pixel*/, texture3d_desc.Depth/* * bytes_per_pixel*/);
+      external_memory_mipmapped_array_desc.flags = 0;
+      external_memory_mipmapped_array_desc.numLevels = texture3d_desc.MipLevels;
+      cuda_error = cudaExternalMemoryGetMappedMipmappedArray(&(g_texture_3d.cuda_mip_mapped_array), g_texture_3d.cuda_external_memory, &external_memory_mipmapped_array_desc);
+      //getLastCudaError("cudaExternalMemoryGetMappedMipmappedArray (g_texture_3d) failed");
+      if (cuda_error != cudaSuccess) {
+        std::cout << "cudaExternalMemoryGetMappedMipmappedArray (g_texture_3d) failed at Texture3D voxels (" << texture3d_desc.Width << ", " << texture3d_desc.Height << ", " << texture3d_desc.Depth << ")" << std::endl;
+        dxgi_resource->Release();
+        return false;
+      }
+      dxgi_resource->Release();
 
       CleanupTexture(g_texture_3d);
     }
@@ -716,9 +825,16 @@ HRESULT InitTexture3D(const int width, const int height, const int depth, Textur
 // Desc: Releases all previously initialized objects
 //-----------------------------------------------------------------------------
 void CleanupTexture(Texture3D& g_texture_3d) {
-  // unregister the Cuda resources
-  cudaGraphicsUnregisterResource(g_texture_3d.cudaResource);
-  getLastCudaError("cudaGraphicsUnregisterResource (g_texture_3d) failed");
+  //// unregister the Cuda resources
+  //cudaGraphicsUnregisterResource(g_texture_3d.cudaResource);
+  //getLastCudaError("cudaGraphicsUnregisterResource (g_texture_3d) failed");
+
+  if (g_texture_3d.cuda_mip_mapped_array != 0) {
+    cudaFreeMipmappedArray(g_texture_3d.cuda_mip_mapped_array);
+  }
+  if (g_texture_3d.cuda_external_memory != nullptr) {
+    cudaDestroyExternalMemory(g_texture_3d.cuda_external_memory);
+  }
 
   //
   // clean up Direct3D
