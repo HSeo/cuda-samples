@@ -241,20 +241,6 @@ const unsigned int g_WindowHeight = 720;
 
 int g_iFrameToCompare = 10;
 
-// Data structure for 2D texture shared between DX10 and CUDA
-struct {
-  ID3D11Texture2D *pTexture;
-  ID3D11ShaderResourceView *pSRView;
-  cudaGraphicsResource *cudaResource;
-  void *cudaLinearMemory;
-  size_t pitch;
-  int width;
-  int height;
-#ifndef USEEFFECT
-  int offsetInShader;
-#endif
-} g_texture_2d;
-
 // Data structure for volume textures shared between DX10 and CUDA
 struct {
   ID3D11Texture3D *pTexture;
@@ -269,19 +255,6 @@ struct {
   int offsetInShader;
 #endif
 } g_texture_3d;
-
-// Data structure for cube texture shared between DX10 and CUDA
-struct {
-  ID3D11Texture2D *pTexture;
-  ID3D11ShaderResourceView *pSRView;
-  cudaGraphicsResource *cudaResource;
-  void *cudaLinearMemory;
-  size_t pitch;
-  int size;
-#ifndef USEEFFECT
-  int offsetInShader;
-#endif
-} g_texture_cube;
 
 // The CUDA kernel launchers that get called
 extern "C" {
@@ -484,39 +457,6 @@ int main(int argc, char *argv[]) {
 
   // Initialize Direct3D
   if (SUCCEEDED(InitD3D(hWnd)) && SUCCEEDED(InitTextures())) {
-    // 2D
-    // register the Direct3D resources that we'll use
-    // we'll read to and write from g_texture_2d, so don't set any special map
-    // flags for it
-    cudaGraphicsD3D11RegisterResource(&g_texture_2d.cudaResource,
-                                      g_texture_2d.pTexture,
-                                      cudaGraphicsRegisterFlagsNone);
-    getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_2d) failed");
-    // cuda cannot write into the texture directly : the texture is seen as a
-    // cudaArray and can only be mapped as a texture
-    // Create a buffer so that cuda can write into it
-    // pixel fmt is DXGI_FORMAT_R32G32B32A32_FLOAT
-    cudaMallocPitch(&g_texture_2d.cudaLinearMemory, &g_texture_2d.pitch,
-                    g_texture_2d.width * sizeof(float) * 4,
-                    g_texture_2d.height);
-    getLastCudaError("cudaMallocPitch (g_texture_2d) failed");
-    cudaMemset(g_texture_2d.cudaLinearMemory, 1,
-               g_texture_2d.pitch * g_texture_2d.height);
-
-    // CUBE
-    cudaGraphicsD3D11RegisterResource(&g_texture_cube.cudaResource,
-                                      g_texture_cube.pTexture,
-                                      cudaGraphicsRegisterFlagsNone);
-    getLastCudaError(
-        "cudaGraphicsD3D11RegisterResource (g_texture_cube) failed");
-    // create the buffer. pixel fmt is DXGI_FORMAT_R8G8B8A8_SNORM
-    cudaMallocPitch(&g_texture_cube.cudaLinearMemory, &g_texture_cube.pitch,
-                    g_texture_cube.size * 4, g_texture_cube.size);
-    getLastCudaError("cudaMallocPitch (g_texture_cube) failed");
-    cudaMemset(g_texture_cube.cudaLinearMemory, 1,
-               g_texture_cube.pitch * g_texture_cube.size);
-    getLastCudaError("cudaMemset (g_texture_cube) failed");
-
     // 3D
     cudaGraphicsD3D11RegisterResource(&g_texture_3d.cudaResource,
                                       g_texture_3d.pTexture,
@@ -799,42 +739,6 @@ HRESULT InitTextures() {
   //
   // create the D3D resources we'll be using
   //
-  // 2D texture
-  {
-    g_texture_2d.width = 256;
-    g_texture_2d.height = 256;
-
-    D3D11_TEXTURE2D_DESC desc;
-    ZeroMemory(&desc, sizeof(D3D11_TEXTURE2D_DESC));
-    desc.Width = g_texture_2d.width;
-    desc.Height = g_texture_2d.height;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-    if (FAILED(g_pd3dDevice->CreateTexture2D(&desc, NULL,
-                                             &g_texture_2d.pTexture))) {
-      return E_FAIL;
-    }
-
-    if (FAILED(g_pd3dDevice->CreateShaderResourceView(
-            g_texture_2d.pTexture, NULL, &g_texture_2d.pSRView))) {
-      return E_FAIL;
-    }
-
-#ifdef USEEFFECT
-    g_pTexture2D->SetResource(g_texture_2d.pSRView);
-#else
-    g_texture_2d.offsetInShader =
-        0;  // to be clean we should look for the offset from the shader code
-    g_pd3dDeviceContext->PSSetShaderResources(g_texture_2d.offsetInShader, 1,
-                                              &g_texture_2d.pSRView);
-#endif
-  }
-
   // 3D texture
   {
     g_texture_3d.width = 64;
@@ -871,49 +775,6 @@ HRESULT InitTextures() {
 #endif
   }
 
-  // cube texture
-  {
-    g_texture_cube.size = 64;
-
-    D3D11_TEXTURE2D_DESC desc;
-    ZeroMemory(&desc, sizeof(D3D11_TEXTURE2D_DESC));
-    desc.Width = g_texture_cube.size;
-    desc.Height = g_texture_cube.size;
-    desc.MipLevels = 1;
-    desc.ArraySize = 6;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    desc.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
-
-    if (FAILED(g_pd3dDevice->CreateTexture2D(&desc, NULL,
-                                             &g_texture_cube.pTexture))) {
-      return E_FAIL;
-    }
-
-    D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc;
-    ZeroMemory(&SRVDesc, sizeof(SRVDesc));
-    SRVDesc.Format = desc.Format;
-    SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
-    SRVDesc.TextureCube.MipLevels = desc.MipLevels;
-    SRVDesc.TextureCube.MostDetailedMip = 0;
-
-    if (FAILED(g_pd3dDevice->CreateShaderResourceView(
-            g_texture_cube.pTexture, &SRVDesc, &g_texture_cube.pSRView))) {
-      return E_FAIL;
-    }
-
-#ifdef USEEFFECT
-    g_pTextureCube->SetResource(g_texture_cube.pSRView);
-#else
-    g_texture_cube.offsetInShader =
-        2;  // to be clean we should look for the offset from the shader code
-    g_pd3dDeviceContext->PSSetShaderResources(g_texture_cube.offsetInShader, 1,
-                                              &g_texture_cube.pSRView);
-#endif
-  }
-
   return S_OK;
 }
 
@@ -923,30 +784,6 @@ HRESULT InitTextures() {
 void RunKernels() {
   static float t = 0.0f;
 
-  // populate the 2d texture
-  {
-    cudaArray *cuArray;
-    cudaGraphicsSubResourceGetMappedArray(&cuArray, g_texture_2d.cudaResource,
-                                          0, 0);
-    getLastCudaError(
-        "cudaGraphicsSubResourceGetMappedArray (cuda_texture_2d) failed");
-
-    // kick off the kernel and send the staging buffer cudaLinearMemory as an
-    // argument to allow the kernel to write to it
-    cuda_texture_2d(g_texture_2d.cudaLinearMemory, g_texture_2d.width,
-                    g_texture_2d.height, g_texture_2d.pitch, t);
-    getLastCudaError("cuda_texture_2d failed");
-
-    // then we want to copy cudaLinearMemory to the D3D texture, via its mapped
-    // form : cudaArray
-    cudaMemcpy2DToArray(
-        cuArray,                                            // dst array
-        0, 0,                                               // offset
-        g_texture_2d.cudaLinearMemory, g_texture_2d.pitch,  // src
-        g_texture_2d.width * 4 * sizeof(float), g_texture_2d.height,  // extent
-        cudaMemcpyDeviceToDevice);                                    // kind
-    getLastCudaError("cudaMemcpy2DToArray failed");
-  }
   // populate the volume texture
   {
     size_t pitchSlice = g_texture_3d.pitch * g_texture_3d.height;
@@ -979,31 +816,6 @@ void RunKernels() {
     getLastCudaError("cudaMemcpy3D failed");
   }
 
-  // populate the faces of the cube map
-  for (int face = 0; face < 6; ++face) {
-    cudaArray *cuArray;
-    cudaGraphicsSubResourceGetMappedArray(&cuArray, g_texture_cube.cudaResource,
-                                          face, 0);
-    getLastCudaError(
-        "cudaGraphicsSubResourceGetMappedArray (cuda_texture_cube) failed");
-
-    // kick off the kernel and send the staging buffer cudaLinearMemory as an
-    // argument to allow the kernel to write to it
-    cuda_texture_cube(g_texture_cube.cudaLinearMemory, g_texture_cube.size,
-                      g_texture_cube.size, g_texture_cube.pitch, face, t);
-    getLastCudaError("cuda_texture_cube failed");
-
-    // then we want to copy cudaLinearMemory to the D3D texture, via its mapped
-    // form : cudaArray
-    cudaMemcpy2DToArray(cuArray,  // dst array
-                        0, 0,     // offset
-                        g_texture_cube.cudaLinearMemory,
-                        g_texture_cube.pitch,                          // src
-                        g_texture_cube.size * 4, g_texture_cube.size,  // extent
-                        cudaMemcpyDeviceToDevice);                     // kind
-    getLastCudaError("cudaMemcpy2DToArray failed");
-  }
-
   t += 0.1f;
 }
 
@@ -1016,28 +828,10 @@ bool DrawScene() {
   g_pd3dDeviceContext->ClearRenderTargetView(g_pSwapChainRTV, ClearColor);
 
   float quadRect[4] = {-0.9f, -0.9f, 0.7f, 0.7f};
-//
-// draw the 2d texture
-//
-#ifdef USEEFFECT
-  g_pUseCase->SetInt(0);
-  g_pvQuadRect->SetFloatVector((float *)&quadRect);
-  g_pSimpleTechnique->GetPassByIndex(0)->Apply(0, g_pd3dDeviceContext);
-#else
+
   HRESULT hr;
   D3D11_MAPPED_SUBRESOURCE mappedResource;
-  ConstantBuffer *pcb;
-  hr = g_pd3dDeviceContext->Map(g_pConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD,
-                                0, &mappedResource);
-  AssertOrQuit(SUCCEEDED(hr));
-  pcb = (ConstantBuffer *)mappedResource.pData;
-  {
-    memcpy(pcb->vQuadRect, quadRect, sizeof(float) * 4);
-    pcb->UseCase = 0;
-  }
-  g_pd3dDeviceContext->Unmap(g_pConstantBuffer, 0);
-#endif
-  g_pd3dDeviceContext->Draw(4, 0);
+  ConstantBuffer* pcb;
 
   //
   // draw a slice the 3d texture
@@ -1060,36 +854,6 @@ bool DrawScene() {
 #endif
   g_pd3dDeviceContext->Draw(4, 0);
 
-  //
-  // draw the 6 faces of the cube texture
-  //
-  float faceRect[4] = {-0.1f, -0.9f, 0.5f, 0.5f};
-
-  for (int f = 0; f < 6; f++) {
-    if (f == 3) {
-      faceRect[0] += 0.55f;
-      faceRect[1] = -0.9f;
-    }
-
-#ifdef USEEFFECT
-    g_pUseCase->SetInt(2 + f);
-    g_pvQuadRect->SetFloatVector((float *)&faceRect);
-    g_pSimpleTechnique->GetPassByIndex(0)->Apply(0, g_pd3dDeviceContext);
-#else
-    hr = g_pd3dDeviceContext->Map(g_pConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD,
-                                  0, &mappedResource);
-    AssertOrQuit(SUCCEEDED(hr));
-    pcb = (ConstantBuffer *)mappedResource.pData;
-    {
-      memcpy(pcb->vQuadRect, faceRect, sizeof(float) * 4);
-      pcb->UseCase = 2 + f;
-    }
-    g_pd3dDeviceContext->Unmap(g_pConstantBuffer, 0);
-#endif
-    g_pd3dDeviceContext->Draw(4, 0);
-    faceRect[1] += 0.6f;
-  }
-
   // Present the backbuffer contents to the display
   g_pSwapChain->Present(0, 0);
   return true;
@@ -1101,30 +865,16 @@ bool DrawScene() {
 //-----------------------------------------------------------------------------
 void Cleanup() {
   // unregister the Cuda resources
-  cudaGraphicsUnregisterResource(g_texture_2d.cudaResource);
-  getLastCudaError("cudaGraphicsUnregisterResource (g_texture_2d) failed");
-  cudaFree(g_texture_2d.cudaLinearMemory);
-  getLastCudaError("cudaFree (g_texture_2d) failed");
-
-  cudaGraphicsUnregisterResource(g_texture_cube.cudaResource);
-  getLastCudaError("cudaGraphicsUnregisterResource (g_texture_cube) failed");
-  cudaFree(g_texture_cube.cudaLinearMemory);
-  getLastCudaError("cudaFree (g_texture_2d) failed");
-
   cudaGraphicsUnregisterResource(g_texture_3d.cudaResource);
   getLastCudaError("cudaGraphicsUnregisterResource (g_texture_3d) failed");
   cudaFree(g_texture_3d.cudaLinearMemory);
-  getLastCudaError("cudaFree (g_texture_2d) failed");
+  getLastCudaError("cudaFree (g_texture_3d) failed");
 
   //
   // clean up Direct3D
   //
   {
     // release the resources we created
-    g_texture_2d.pSRView->Release();
-    g_texture_2d.pTexture->Release();
-    g_texture_cube.pSRView->Release();
-    g_texture_cube.pTexture->Release();
     g_texture_3d.pSRView->Release();
     g_texture_3d.pTexture->Release();
 
@@ -1188,10 +938,9 @@ void Render() {
   if (doit) {
     doit = true;
     cudaStream_t stream = 0;
-    const int nbResources = 3;
+    const int nbResources = 1;
     cudaGraphicsResource *ppResources[nbResources] = {
-        g_texture_2d.cudaResource, g_texture_3d.cudaResource,
-        g_texture_cube.cudaResource,
+        g_texture_3d.cudaResource,
     };
     cudaGraphicsMapResources(nbResources, ppResources, stream);
     getLastCudaError("cudaGraphicsMapResources(3) failed");
