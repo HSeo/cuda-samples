@@ -272,10 +272,7 @@ bool cuda_texture_cube(void *surface, int width, int height, size_t pitch,
 HRESULT InitD3D(HWND hWnd);
 HRESULT InitTextures();
 
-void RunKernels();
-bool DrawScene();
 void Cleanup();
-void Render();
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -461,6 +458,7 @@ int main(int argc, char *argv[]) {
     cudaGraphicsD3D11RegisterResource(&g_texture_3d.cudaResource,
                                       g_texture_3d.pTexture,
                                       cudaGraphicsRegisterFlagsNone);
+    std::cout << "Registered" << std::endl;
     getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_3d) failed");
     // create the buffer. pixel fmt is DXGI_FORMAT_R8G8B8A8_SNORM
     // cudaMallocPitch(&g_texture_3d.cudaLinearMemory, &g_texture_3d.pitch,
@@ -474,52 +472,8 @@ int main(int argc, char *argv[]) {
                g_texture_3d.pitch * g_texture_3d.height * g_texture_3d.depth);
     getLastCudaError("cudaMemset (g_texture_3d) failed");
   }
-
-  //
-  // the main loop
-  //
-  while (false == g_bDone) {
-    Render();
-
-    //
-    // handle I/O
-    //
-    MSG msg;
-    ZeroMemory(&msg, sizeof(msg));
-
-    while (msg.message != WM_QUIT) {
-      if (PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-      } else {
-        Render();
-
-        if (ref_file) {
-          for (int count = 0; count < g_iFrameToCompare; count++) {
-            Render();
-          }
-
-          const char *cur_image_path = "simpleD3D11Texture.ppm";
-
-          // Save a reference of our current test run image
-          CheckRenderD3D11::ActiveRenderTargetToPPM(g_pd3dDevice,
-                                                    cur_image_path);
-
-          // compare to offical reference image, printing PASS or FAIL.
-          g_bPassed = CheckRenderD3D11::PPMvsPPM(cur_image_path, ref_file,
-                                                 argv[0], MAX_EPSILON, 0.15f);
-
-          g_bDone = true;
-
-          Cleanup();
-
-          PostQuitMessage(0);
-        } else {
-          g_bPassed = true;
-        }
-      }
-    }
-  };
+   
+  Cleanup();
 
   // Release D3D Library (after message loop)
   dynlinkUnloadD3D11API();
@@ -778,87 +732,6 @@ HRESULT InitTextures() {
   return S_OK;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-//! Run the Cuda part of the computation
-////////////////////////////////////////////////////////////////////////////////
-void RunKernels() {
-  static float t = 0.0f;
-
-  // populate the volume texture
-  {
-    size_t pitchSlice = g_texture_3d.pitch * g_texture_3d.height;
-    cudaArray *cuArray;
-    cudaGraphicsSubResourceGetMappedArray(&cuArray, g_texture_3d.cudaResource,
-                                          0, 0);
-    getLastCudaError(
-        "cudaGraphicsSubResourceGetMappedArray (cuda_texture_3d) failed");
-
-    // kick off the kernel and send the staging buffer cudaLinearMemory as an
-    // argument to allow the kernel to write to it
-    cuda_texture_3d(g_texture_3d.cudaLinearMemory, g_texture_3d.width,
-                    g_texture_3d.height, g_texture_3d.depth, g_texture_3d.pitch,
-                    pitchSlice, t);
-    getLastCudaError("cuda_texture_3d failed");
-
-    // then we want to copy cudaLinearMemory to the D3D texture, via its mapped
-    // form : cudaArray
-    struct cudaMemcpy3DParms memcpyParams = {0};
-    memcpyParams.dstArray = cuArray;
-    memcpyParams.srcPtr.ptr = g_texture_3d.cudaLinearMemory;
-    memcpyParams.srcPtr.pitch = g_texture_3d.pitch;
-    memcpyParams.srcPtr.xsize = g_texture_3d.width;
-    memcpyParams.srcPtr.ysize = g_texture_3d.height;
-    memcpyParams.extent.width = g_texture_3d.width;
-    memcpyParams.extent.height = g_texture_3d.height;
-    memcpyParams.extent.depth = g_texture_3d.depth;
-    memcpyParams.kind = cudaMemcpyDeviceToDevice;
-    cudaMemcpy3D(&memcpyParams);
-    getLastCudaError("cudaMemcpy3D failed");
-  }
-
-  t += 0.1f;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-//! Draw the final result on the screen
-////////////////////////////////////////////////////////////////////////////////
-bool DrawScene() {
-  // Clear the backbuffer to a black color
-  float ClearColor[4] = {0.5f, 0.5f, 0.6f, 1.0f};
-  g_pd3dDeviceContext->ClearRenderTargetView(g_pSwapChainRTV, ClearColor);
-
-  float quadRect[4] = {-0.9f, -0.9f, 0.7f, 0.7f};
-
-  HRESULT hr;
-  D3D11_MAPPED_SUBRESOURCE mappedResource;
-  ConstantBuffer* pcb;
-
-  //
-  // draw a slice the 3d texture
-  //
-  quadRect[1] = 0.1f;
-#ifdef USEEFFECT
-  g_pUseCase->SetInt(1);
-  g_pvQuadRect->SetFloatVector((float *)&quadRect);
-  g_pSimpleTechnique->GetPassByIndex(0)->Apply(0, g_pd3dDeviceContext);
-#else
-  hr = g_pd3dDeviceContext->Map(g_pConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD,
-                                0, &mappedResource);
-  AssertOrQuit(SUCCEEDED(hr));
-  pcb = (ConstantBuffer *)mappedResource.pData;
-  {
-    memcpy(pcb->vQuadRect, quadRect, sizeof(float) * 4);
-    pcb->UseCase = 1;
-  }
-  g_pd3dDeviceContext->Unmap(g_pConstantBuffer, 0);
-#endif
-  g_pd3dDeviceContext->Draw(4, 0);
-
-  // Present the backbuffer contents to the display
-  g_pSwapChain->Present(0, 0);
-  return true;
-}
-
 //-----------------------------------------------------------------------------
 // Name: Cleanup()
 // Desc: Releases all previously initialized objects
@@ -920,47 +793,6 @@ void Cleanup() {
       g_pd3dDevice->Release();
     }
   }
-}
-
-//-----------------------------------------------------------------------------
-// Name: Render()
-// Desc: Launches the CUDA kernels to fill in the texture data
-//-----------------------------------------------------------------------------
-void Render() {
-  //
-  // map the resources we've registered so we can access them in Cuda
-  // - it is most efficient to map and unmap all resources in a single call,
-  //   and to have the map/unmap calls be the boundary between using the GPU
-  //   for Direct3D and Cuda
-  //
-  static bool doit = true;
-
-  if (doit) {
-    doit = true;
-    cudaStream_t stream = 0;
-    const int nbResources = 1;
-    cudaGraphicsResource *ppResources[nbResources] = {
-        g_texture_3d.cudaResource,
-    };
-    cudaGraphicsMapResources(nbResources, ppResources, stream);
-    getLastCudaError("cudaGraphicsMapResources(3) failed");
-
-    //
-    // run kernels which will populate the contents of those textures
-    //
-    RunKernels();
-
-    //
-    // unmap the resources
-    //
-    cudaGraphicsUnmapResources(nbResources, ppResources, stream);
-    getLastCudaError("cudaGraphicsUnmapResources(3) failed");
-  }
-
-  //
-  // draw the scene using them
-  //
-  DrawScene();
 }
 
 //-----------------------------------------------------------------------------
