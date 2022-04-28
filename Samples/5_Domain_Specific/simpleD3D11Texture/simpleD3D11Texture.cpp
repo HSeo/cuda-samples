@@ -244,15 +244,14 @@ const unsigned int g_WindowHeight = 720;
 int g_iFrameToCompare = 10;
 
 // Data structure for volume textures shared between DX11 and CUDA
-struct Texture3D {
-  ID3D11Texture3D *pTexture;
+struct Texture2D {
+  ID3D11Texture2D *pTexture;
   cudaExternalMemory_t cuda_external_memory = nullptr;
   cudaMipmappedArray* cuda_mip_mapped_array = 0;
   //cudaGraphicsResource *cudaResource;
   size_t pitch;
   int width;
   int height;
-  int depth;
 #ifndef USEEFFECT
   int offsetInShader;
 #endif
@@ -272,9 +271,9 @@ bool cuda_texture_cube(void *surface, int width, int height, size_t pitch,
 // Forward declarations
 //-----------------------------------------------------------------------------
 HRESULT InitD3D(HWND hWnd);
-HRESULT InitTexture3D(const int width, const int height, const int depth, Texture3D& g_texture_3d);
+HRESULT InitTexture2D(const int width, const int height, Texture2D& g_texture_2d);
 
-void CleanupTexture(Texture3D& g_texture_3d);
+void CleanupTexture(Texture2D& g_texture_2d);
 void CleanupOthers();
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -374,9 +373,9 @@ bool findDXDevice(char *dev_name) {
   return true;
 }
 
-bool GetTextureBufferSizeByte(const D3D11_TEXTURE3D_DESC& d3d11_texture3d_desc, unsigned long long* buffer_size_byte) {
-  const unsigned long long num_total_voxels = (unsigned long long)(d3d11_texture3d_desc.Width) * (unsigned long long)(d3d11_texture3d_desc.Height) * (unsigned long long)(d3d11_texture3d_desc.Depth);
-  switch (d3d11_texture3d_desc.Format) {
+bool GetTextureBufferSizeByte(const D3D11_TEXTURE2D_DESC& d3d11_texture2d_desc, unsigned long long* buffer_size_byte) {
+  const unsigned long long num_total_voxels = (unsigned long long)(d3d11_texture2d_desc.Width) * (unsigned long long)(d3d11_texture2d_desc.Height);
+  switch (d3d11_texture2d_desc.Format) {
   case DXGI_FORMAT::DXGI_FORMAT_R8_UINT:
   case DXGI_FORMAT::DXGI_FORMAT_R8_UNORM:
     *buffer_size_byte = num_total_voxels * sizeof(unsigned char);
@@ -425,26 +424,26 @@ bool GetCudaChannelFormatDesc(const DXGI_FORMAT& dxgi_format, cudaChannelFormatD
   }
 }
 
-bool InitTexture3DInterop(const int width, const int height, const int depth, Texture3D& g_texture_3d) {
-  if (SUCCEEDED(InitTexture3D(width, height, depth, g_texture_3d))) {
-    //cudaGraphicsD3D11RegisterResource(&g_texture_3d.cudaResource,
-    //  g_texture_3d.pTexture,
+bool InitTexture2DInterop(const int width, const int height, Texture2D& g_texture_2d) {
+  if (SUCCEEDED(InitTexture2D(width, height, g_texture_2d))) {
+    //cudaGraphicsD3D11RegisterResource(&g_texture_2d.cudaResource,
+    //  g_texture_2d.pTexture,
     //  cudaGraphicsRegisterFlagsNone);
-    //getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_3d) failed");
+    //getLastCudaError("cudaGraphicsD3D11RegisterResource (g_texture_2d) failed");
 
-    D3D11_TEXTURE3D_DESC texture3d_desc;
-    g_texture_3d.pTexture->GetDesc(&texture3d_desc);
+    D3D11_TEXTURE2D_DESC texture2d_desc;
+    g_texture_2d.pTexture->GetDesc(&texture2d_desc);
 
     unsigned long long buffer_size_byte;
-    if (!GetTextureBufferSizeByte(texture3d_desc, &buffer_size_byte)) { return false; }
+    if (!GetTextureBufferSizeByte(texture2d_desc, &buffer_size_byte)) { return false; }
 
     IDXGIResource1* dxgi_resource;
-    HANDLE d3d11_texture_3d_shared_handle;
-    if (FAILED(g_texture_3d.pTexture->QueryInterface(__uuidof(IDXGIResource1), (void**)&dxgi_resource))) {
+    HANDLE d3d11_texture_2d_shared_handle;
+    if (FAILED(g_texture_2d.pTexture->QueryInterface(__uuidof(IDXGIResource1), (void**)&dxgi_resource))) {
       std::cout << "Error: IDXGIResource1 from D3D11_buffer could not be acquired." << std::endl;
       return false;
     }
-    if (FAILED(dxgi_resource->GetSharedHandle(&d3d11_texture_3d_shared_handle))) { // Do not use CloseHandle(shared_handle) for this handle because it is not an NT handle. It causes "An invalid handle was specified." error.
+    if (FAILED(dxgi_resource->GetSharedHandle(&d3d11_texture_2d_shared_handle))) { // Do not use CloseHandle(shared_handle) for this handle because it is not an NT handle. It causes "An invalid handle was specified." error.
       std::cout << "Error: shared handle could not be acquired." << std::endl;
       dxgi_resource->Release();
       return false;
@@ -455,30 +454,30 @@ bool InitTexture3DInterop(const int width, const int height, const int depth, Te
     external_memory_handle_desc.type = cudaExternalMemoryHandleTypeD3D11ResourceKmt;
     external_memory_handle_desc.size = buffer_size_byte;
     external_memory_handle_desc.flags = cudaExternalMemoryDedicated;
-    external_memory_handle_desc.handle.win32.handle = (void*)d3d11_texture_3d_shared_handle;
-    cudaError_t cuda_error = cudaImportExternalMemory(&(g_texture_3d.cuda_external_memory), &external_memory_handle_desc);
-    //getLastCudaError("cudaImportExternalMemory (g_texture_3d) failed");
+    external_memory_handle_desc.handle.win32.handle = (void*)d3d11_texture_2d_shared_handle;
+    cudaError_t cuda_error = cudaImportExternalMemory(&(g_texture_2d.cuda_external_memory), &external_memory_handle_desc);
+    //getLastCudaError("cudaImportExternalMemory (g_texture_2d) failed");
     if (cuda_error != cudaSuccess) {
       dxgi_resource->Release();
       return false;
     }
 
     cudaChannelFormatDesc cuda_channel_format_desc;
-    if (!GetCudaChannelFormatDesc(texture3d_desc.Format, &cuda_channel_format_desc)) { return false; }
+    if (!GetCudaChannelFormatDesc(texture2d_desc.Format, &cuda_channel_format_desc)) { return false; }
 
-    const unsigned int bytes_per_pixel = buffer_size_byte / ((unsigned long long)texture3d_desc.Width * texture3d_desc.Height * texture3d_desc.Depth);
+    const unsigned int bytes_per_pixel = buffer_size_byte / ((unsigned long long)texture2d_desc.Width * texture2d_desc.Height);
 
     cudaExternalMemoryMipmappedArrayDesc external_memory_mipmapped_array_desc;
     memset(&external_memory_mipmapped_array_desc, 0, sizeof(external_memory_mipmapped_array_desc));
     external_memory_mipmapped_array_desc.offset = 0;
     external_memory_mipmapped_array_desc.formatDesc = cuda_channel_format_desc;
-    external_memory_mipmapped_array_desc.extent = make_cudaExtent(texture3d_desc.Width/* * bytes_per_pixel*/, texture3d_desc.Height/* * bytes_per_pixel*/, texture3d_desc.Depth/* * bytes_per_pixel*/);
+    external_memory_mipmapped_array_desc.extent = make_cudaExtent(texture2d_desc.Width/* * bytes_per_pixel*/, texture2d_desc.Height/* * bytes_per_pixel*/, 0);
     external_memory_mipmapped_array_desc.flags = 0;
-    external_memory_mipmapped_array_desc.numLevels = texture3d_desc.MipLevels;
-    cuda_error = cudaExternalMemoryGetMappedMipmappedArray(&(g_texture_3d.cuda_mip_mapped_array), g_texture_3d.cuda_external_memory, &external_memory_mipmapped_array_desc);
-    //getLastCudaError("cudaExternalMemoryGetMappedMipmappedArray (g_texture_3d) failed");
+    external_memory_mipmapped_array_desc.numLevels = texture2d_desc.MipLevels;
+    cuda_error = cudaExternalMemoryGetMappedMipmappedArray(&(g_texture_2d.cuda_mip_mapped_array), g_texture_2d.cuda_external_memory, &external_memory_mipmapped_array_desc);
+    //getLastCudaError("cudaExternalMemoryGetMappedMipmappedArray (g_texture_2d) failed");
     if (cuda_error != cudaSuccess) {
-      std::cout << "cudaExternalMemoryGetMappedMipmappedArray (g_texture_3d) failed " << cudaGetErrorName(cuda_error) << " at Texture3D voxels(" << texture3d_desc.Width << ", " << texture3d_desc.Height << ", " << texture3d_desc.Depth << ")" << std::endl;
+      std::cout << "cudaExternalMemoryGetMappedMipmappedArray (g_texture_2d) failed " << cudaGetErrorName(cuda_error) << " at Texture2D size (" << texture2d_desc.Width << ", " << texture2d_desc.Height << ")" << std::endl;
       dxgi_resource->Release();
       return false;
     }
@@ -570,23 +569,22 @@ int main(int argc, char *argv[]) {
 
   // Initialize Direct3D
   if (SUCCEEDED(InitD3D(hWnd))) {
-    std::vector<int> success_depths;
+    std::vector<int> success_heights;
     // 3D
-    for (int depth = 1; depth <= 512; ++depth) {
-      Texture3D g_texture_3d;
+    for (int height = 1; height <= 512; ++height) {
+      Texture2D g_texture_2d;
       const int width = 512;
-      const int height = 512;
-      const bool ret = InitTexture3DInterop(width, height, depth, g_texture_3d);
+      const bool ret = InitTexture2DInterop(width, height, g_texture_2d);
       if (ret) {
-        success_depths.push_back(depth);
+        success_heights.push_back(height);
       }
-      CleanupTexture(g_texture_3d);
+      CleanupTexture(g_texture_2d);
     }
 
     std::cout << "-----------------------------------" << std::endl;
-    std::cout << "Success depths are ";
-    for (const int success_depth : success_depths) {
-      std::cout << success_depth << ", ";
+    std::cout << "Success heights are ";
+    for (const int success_height : success_heights) {
+      std::cout << success_height << ", ";
     }
     std::cout << std::endl;
   }
@@ -802,32 +800,32 @@ HRESULT InitD3D(HWND hWnd) {
 }
 
 //-----------------------------------------------------------------------------
-// Name: InitTexture3D()
+// Name: InitTexture2D()
 // Desc: Initializes Direct3D Textures (allocation and initialization)
 //-----------------------------------------------------------------------------
-HRESULT InitTexture3D(const int width, const int height, const int depth, Texture3D& g_texture_3d) {
+HRESULT InitTexture2D(const int width, const int height, Texture2D& g_texture_2d) {
   //
   // create the D3D resources we'll be using
   //
-  // 3D texture
+  // 2D texture
   {
-    g_texture_3d.width = width;
-    g_texture_3d.height = height;
-    g_texture_3d.depth = depth;
+    g_texture_2d.width = width;
+    g_texture_2d.height = height;
 
-    D3D11_TEXTURE3D_DESC desc;
-    ZeroMemory(&desc, sizeof(D3D11_TEXTURE3D_DESC));
-    desc.Width = g_texture_3d.width;
-    desc.Height = g_texture_3d.height;
-    desc.Depth = g_texture_3d.depth;
+    D3D11_TEXTURE2D_DESC desc;
+    ZeroMemory(&desc, sizeof(D3D11_TEXTURE2D_DESC));
+    desc.Width = g_texture_2d.width;
+    desc.Height = g_texture_2d.height;
     desc.MipLevels = 1;
+    desc.ArraySize = 1;
     desc.Format = DXGI_FORMAT_R16_UNORM;
+    desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
-    if (FAILED(g_pd3dDevice->CreateTexture3D(&desc, NULL,
-                                             &g_texture_3d.pTexture))) {
+    if (FAILED(g_pd3dDevice->CreateTexture2D(&desc, NULL,
+                                             &g_texture_2d.pTexture))) {
       return E_FAIL;
     }
   }
@@ -839,25 +837,25 @@ HRESULT InitTexture3D(const int width, const int height, const int depth, Textur
 // Name: Cleanup()
 // Desc: Releases all previously initialized objects
 //-----------------------------------------------------------------------------
-void CleanupTexture(Texture3D& g_texture_3d) {
+void CleanupTexture(Texture2D& g_texture_2d) {
   //// unregister the Cuda resources
-  //cudaGraphicsUnregisterResource(g_texture_3d.cudaResource);
-  //getLastCudaError("cudaGraphicsUnregisterResource (g_texture_3d) failed");
+  //cudaGraphicsUnregisterResource(g_texture_2d.cudaResource);
+  //getLastCudaError("cudaGraphicsUnregisterResource (g_texture_2d) failed");
 
-  if (g_texture_3d.cuda_mip_mapped_array != 0) {
-    cudaFreeMipmappedArray(g_texture_3d.cuda_mip_mapped_array);
-    g_texture_3d.cuda_mip_mapped_array = 0;
+  if (g_texture_2d.cuda_mip_mapped_array != 0) {
+    cudaFreeMipmappedArray(g_texture_2d.cuda_mip_mapped_array);
+    g_texture_2d.cuda_mip_mapped_array = 0;
   }
-  if (g_texture_3d.cuda_external_memory != nullptr) {
-    cudaDestroyExternalMemory(g_texture_3d.cuda_external_memory);
-    g_texture_3d.cuda_external_memory = nullptr;
+  if (g_texture_2d.cuda_external_memory != nullptr) {
+    cudaDestroyExternalMemory(g_texture_2d.cuda_external_memory);
+    g_texture_2d.cuda_external_memory = nullptr;
   }
 
   //
   // clean up Direct3D
   //
   {
-    g_texture_3d.pTexture->Release();
+    g_texture_2d.pTexture->Release();
   }
 }
 
