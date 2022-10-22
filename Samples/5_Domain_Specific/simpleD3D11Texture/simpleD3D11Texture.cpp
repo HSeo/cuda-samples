@@ -482,6 +482,9 @@ bool InitTexture3DInterop(const int width, const int height, const int depth, Te
       dxgi_resource->Release();
       return false;
     }
+    else {
+      std::cout << "Succeeded at Texture3D voxels(" << texture3d_desc.Width << ", " << texture3d_desc.Height << ", " << texture3d_desc.Depth << ")" << std::endl;
+    }
     dxgi_resource->Release();
     return true;
   }
