@@ -861,6 +861,10 @@ void CleanupTexture(Texture3D& g_texture_3d) {
   //
   {
     g_texture_3d.pTexture->Release();
+    if (g_pd3dDeviceContext) {
+      g_pd3dDeviceContext->ClearState();
+      g_pd3dDeviceContext->Flush();
+    }
   }
 }
 
